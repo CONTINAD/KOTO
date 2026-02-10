@@ -51,6 +51,7 @@
                 <a href="#about">About</a>
                 <a href="#how-to-buy">Buy</a>
                 <a href="#chart">Chart</a>
+                <a href="#pfp-generator">PFP Maker</a>
                 <a href="#community">Community</a>
             </div>
             <a href="https://dexscreener.com/solana/CoQUXvnyNehEz6U2WXuBBGZrZg2xDj666fv19ATYYqQu" target="_blank"
@@ -66,6 +67,7 @@
         <a href="#about" class="mobile-link">About</a>
         <a href="#how-to-buy" class="mobile-link">Buy</a>
         <a href="#chart" class="mobile-link">Chart</a>
+        <a href="#pfp-generator" class="mobile-link">PFP Maker</a>
         <a href="#community" class="mobile-link">Community</a>
         <a href="https://dexscreener.com/solana/CoQUXvnyNehEz6U2WXuBBGZrZg2xDj666fv19ATYYqQu" target="_blank"
             class="btn btn-primary" style="width:100%;text-align:center;">Buy $KOTO</a>
@@ -212,6 +214,51 @@
                     <iframe
                         src="https://dexscreener.com/solana/CoQUXvnyNehEz6U2WXuBBGZrZg2xDj666fv19ATYYqQu?embed=1&theme=dark&trades=0&info=0"
                         loading="lazy"></iframe>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- PFP Generator Section -->
+    <section class="pfp-section" id="pfp-generator">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-badge">🎨 PFP Maker</span>
+                <h2 class="section-title">Get Your <span class="accent">Scarf</span></h2>
+                <p class="section-subtitle">Upload your PFP, slap a bandana on it, and rep $KOTO.</p>
+            </div>
+            <div class="pfp-generator">
+                <div class="pfp-canvas-wrap">
+                    <canvas id="pfpCanvas" width="512" height="512"></canvas>
+                    <div class="pfp-placeholder" id="pfpPlaceholder">
+                        <div class="pfp-placeholder-icon">📸</div>
+                        <p>Drop your image here or click to upload</p>
+                        <span class="pfp-placeholder-hint">Supports JPG, PNG, WebP</span>
+                    </div>
+                    <input type="file" id="pfpUpload" accept="image/*" hidden>
+                </div>
+                <div class="pfp-controls">
+                    <div class="pfp-control-group">
+                        <label>Bandana Size</label>
+                        <input type="range" id="bandanaSize" min="50" max="400" value="180" class="pfp-slider">
+                    </div>
+                    <div class="pfp-control-group">
+                        <label>Rotation</label>
+                        <input type="range" id="bandanaRotation" min="-180" max="180" value="0" class="pfp-slider">
+                    </div>
+                    <div class="pfp-control-group">
+                        <label>Flip</label>
+                        <div class="pfp-flip-btns">
+                            <button class="btn btn-outline pfp-btn" id="flipH">↔ Horizontal</button>
+                            <button class="btn btn-outline pfp-btn" id="flipV">↕ Vertical</button>
+                        </div>
+                    </div>
+                    <div class="pfp-actions">
+                        <button class="btn btn-outline pfp-btn" id="pfpUploadBtn">📸 Upload Image</button>
+                        <button class="btn btn-outline pfp-btn" id="pfpReset">🔄 Reset</button>
+                        <button class="btn btn-primary pfp-btn pfp-download" id="pfpDownload">⬇ Download PFP</button>
+                    </div>
+                    <p class="pfp-hint">💡 Drag the bandana to position it. Use the sliders to resize and rotate.</p>
                 </div>
             </div>
         </div>
