@@ -859,6 +859,15 @@ img {
     border-radius: var(--radius-sm);
 }
 
+.pfp-status {
+    font-family: var(--font);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--accent-soft);
+    min-height: 20px;
+    transition: all var(--transition);
+}
+
 @media (max-width: 768px) {
     .pfp-generator {
         grid-template-columns: 1fr;

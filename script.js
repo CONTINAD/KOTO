@@ -98,7 +98,7 @@ function setupCursorGlow() {
     });
 }
 
-// ===== PFP BANDANA GENERATOR =====
+// ===== PFP BANDANA GENERATOR (AUTO-DETECT) =====
 function setupPFPGenerator() {
     const canvas = document.getElementById('pfpCanvas');
     const ctx = canvas.getContext('2d');
@@ -112,6 +112,7 @@ function setupPFPGenerator() {
     const rotationSlider = document.getElementById('bandanaRotation');
     const flipHBtn = document.getElementById('flipH');
     const flipVBtn = document.getElementById('flipV');
+    const statusEl = document.getElementById('pfpStatus');
 
     let userImage = null;
     let bandanaImage = new Image();
@@ -134,12 +135,168 @@ function setupPFPGenerator() {
         return canvas.width / canvas.getBoundingClientRect().width;
     }
 
+    function setStatus(msg) {
+        if (statusEl) statusEl.textContent = msg;
+    }
+
+    // ===== FACE DETECTION =====
+    async function detectFace(img) {
+        // Method 1: Browser FaceDetector API (Chrome/Edge)
+        if ('FaceDetector' in window) {
+            try {
+                const detector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+                const faces = await detector.detect(img);
+                if (faces.length > 0) {
+                    return faces[0].boundingBox;
+                }
+            } catch (e) {
+                console.log('FaceDetector API failed, using heuristic', e);
+            }
+        }
+
+        // Method 2: Smart heuristic - analyze skin tone regions
+        return detectFaceHeuristic(img);
+    }
+
+    function detectFaceHeuristic(img) {
+        // Use a temporary canvas to analyze the image
+        const tmpCanvas = document.createElement('canvas');
+        const tmpCtx = tmpCanvas.getContext('2d');
+        const analysisSize = 200; // small for speed
+        tmpCanvas.width = analysisSize;
+        tmpCanvas.height = analysisSize;
+
+        // Draw scaled image
+        tmpCtx.drawImage(img, 0, 0, analysisSize, analysisSize);
+        const imageData = tmpCtx.getImageData(0, 0, analysisSize, analysisSize);
+        const data = imageData.data;
+
+        // Detect skin-colored pixels and find their center of mass
+        let skinX = 0, skinY = 0, skinCount = 0;
+        let topSkinY = analysisSize, bottomSkinY = 0;
+        let leftSkinX = analysisSize, rightSkinX = 0;
+
+        for (let y = 0; y < analysisSize; y++) {
+            for (let x = 0; x < analysisSize; x++) {
+                const i = (y * analysisSize + x) * 4;
+                const r = data[i], g = data[i + 1], b = data[i + 2];
+
+                if (isSkinTone(r, g, b)) {
+                    skinX += x;
+                    skinY += y;
+                    skinCount++;
+                    if (y < topSkinY) topSkinY = y;
+                    if (y > bottomSkinY) bottomSkinY = y;
+                    if (x < leftSkinX) leftSkinX = x;
+                    if (x > rightSkinX) rightSkinX = x;
+                }
+            }
+        }
+
+        if (skinCount > 100) {
+            // Scale back to original image coordinates
+            const scaleX = img.naturalWidth / analysisSize;
+            const scaleY = img.naturalHeight / analysisSize;
+
+            const centerX = (skinX / skinCount) * scaleX;
+            const width = (rightSkinX - leftSkinX) * scaleX;
+            const height = (bottomSkinY - topSkinY) * scaleY;
+            const top = topSkinY * scaleY;
+
+            return {
+                x: centerX - width / 2,
+                y: top,
+                width: width,
+                height: height
+            };
+        }
+
+        // Absolute fallback: assume face is center-top
+        return {
+            x: img.naturalWidth * 0.2,
+            y: img.naturalHeight * 0.1,
+            width: img.naturalWidth * 0.6,
+            height: img.naturalHeight * 0.6
+        };
+    }
+
+    function isSkinTone(r, g, b) {
+        // Multiple skin tone detection rules for diversity
+        // Rule 1: RGB-based
+        const rgbSkin = r > 80 && g > 40 && b > 20 &&
+            r > g && r > b &&
+            (r - g) > 10 &&
+            Math.abs(r - g) < 120 &&
+            r - b > 20;
+
+        // Rule 2: Normalized RGB
+        const total = r + g + b;
+        if (total === 0) return false;
+        const nr = r / total, ng = g / total;
+        const normalizedSkin = nr > 0.35 && nr < 0.55 && ng > 0.25 && ng < 0.42;
+
+        // Rule 3: YCbCr space (handles darker skin tones better)
+        const y = 0.299 * r + 0.587 * g + 0.114 * b;
+        const cb = 128 - 0.169 * r - 0.331 * g + 0.5 * b;
+        const cr = 128 + 0.5 * r - 0.419 * g - 0.081 * b;
+        const ycbcrSkin = y > 40 && cb > 77 && cb < 127 && cr > 133 && cr < 173;
+
+        return rgbSkin || normalizedSkin || ycbcrSkin;
+    }
+
+    async function autoPlaceBandana(img) {
+        setStatus('🔍 Detecting face...');
+
+        const faceBox = await detectFace(img);
+
+        if (faceBox) {
+            // Get canvas-relative coordinates
+            const imgRatio = img.naturalWidth / img.naturalHeight;
+            let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+            if (imgRatio > 1) {
+                sx = (img.naturalWidth - img.naturalHeight) / 2;
+                sw = img.naturalHeight;
+            } else {
+                sy = (img.naturalHeight - img.naturalWidth) / 2;
+                sh = img.naturalWidth;
+            }
+
+            // Transform face coordinates to canvas space
+            const scaleToCanvas = canvas.width / sw;
+            const faceCanvasX = (faceBox.x + faceBox.width / 2 - sx) * scaleToCanvas;
+            const faceCanvasY = (faceBox.y - sy) * scaleToCanvas;
+            const faceCanvasW = faceBox.width * scaleToCanvas;
+            const faceCanvasH = faceBox.height * scaleToCanvas;
+
+            // Position bandana at the bottom of the face (chin/neck area)
+            bandana.x = faceCanvasX;
+            bandana.y = faceCanvasY + faceCanvasH * 0.85;
+            bandana.size = Math.max(80, Math.min(400, faceCanvasW * 0.9));
+            bandana.rotation = 0;
+            bandana.flipH = false;
+            bandana.flipV = false;
+
+            // Update sliders
+            sizeSlider.value = bandana.size;
+            rotationSlider.value = 0;
+
+            setStatus('✅ Bandana placed! Fine-tune by dragging.');
+        } else {
+            // Smart default: center-bottom
+            bandana.x = canvas.width / 2;
+            bandana.y = canvas.height * 0.65;
+            bandana.size = 180;
+            setStatus('📌 Placed at default. Drag to adjust.');
+        }
+
+        draw();
+    }
+
+    // ===== DRAWING =====
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Draw user image
         if (userImage) {
-            // Cover the canvas (crop to square)
             const imgRatio = userImage.width / userImage.height;
             let sx = 0, sy = 0, sw = userImage.width, sh = userImage.height;
             if (imgRatio > 1) {
@@ -151,7 +308,6 @@ function setupPFPGenerator() {
             }
             ctx.drawImage(userImage, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
         } else {
-            // dark bg
             ctx.fillStyle = '#12121a';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
@@ -171,17 +327,20 @@ function setupPFPGenerator() {
         }
     }
 
-    // Upload handlers
-    function handleFile(file) {
+    // ===== FILE HANDLING =====
+    async function handleFile(file) {
         if (!file || !file.type.startsWith('image/')) return;
+        setStatus('⏳ Loading image...');
+
         const reader = new FileReader();
         reader.onload = (e) => {
             const img = new Image();
-            img.onload = () => {
+            img.onload = async () => {
                 userImage = img;
                 placeholder.classList.add('hidden');
                 wrap.classList.add('has-image');
-                draw();
+                draw(); // draw image first
+                await autoPlaceBandana(img); // then auto-detect and place
             };
             img.src = e.target.result;
         };
@@ -205,7 +364,7 @@ function setupPFPGenerator() {
         if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
     });
 
-    // Bandana dragging (mouse)
+    // ===== BANDANA DRAGGING (MOUSE) =====
     canvas.addEventListener('mousedown', (e) => {
         if (!userImage) return;
         const scale = getCanvasScale();
@@ -216,10 +375,10 @@ function setupPFPGenerator() {
         const aspect = bandanaImage.naturalWidth / bandanaImage.naturalHeight;
         const w = bandana.size;
         const h = w / aspect;
-
         const dx = mx - bandana.x;
         const dy = my - bandana.y;
-        if (Math.abs(dx) < w / 2 + 20 && Math.abs(dy) < h / 2 + 20) {
+
+        if (Math.abs(dx) < w / 2 + 30 && Math.abs(dy) < h / 2 + 30) {
             isDragging = true;
             dragOffset.x = dx;
             dragOffset.y = dy;
@@ -238,7 +397,7 @@ function setupPFPGenerator() {
 
     window.addEventListener('mouseup', () => { isDragging = false; });
 
-    // Touch support
+    // ===== TOUCH SUPPORT =====
     canvas.addEventListener('touchstart', (e) => {
         if (!userImage) return;
         const touch = e.touches[0];
@@ -252,7 +411,8 @@ function setupPFPGenerator() {
         const h = w / aspect;
         const dx = mx - bandana.x;
         const dy = my - bandana.y;
-        if (Math.abs(dx) < w / 2 + 20 && Math.abs(dy) < h / 2 + 20) {
+
+        if (Math.abs(dx) < w / 2 + 30 && Math.abs(dy) < h / 2 + 30) {
             isDragging = true;
             dragOffset.x = dx;
             dragOffset.y = dy;
@@ -273,7 +433,7 @@ function setupPFPGenerator() {
 
     canvas.addEventListener('touchend', () => { isDragging = false; });
 
-    // Sliders
+    // ===== CONTROLS =====
     sizeSlider.addEventListener('input', () => {
         bandana.size = parseInt(sizeSlider.value);
         draw();
@@ -283,7 +443,6 @@ function setupPFPGenerator() {
         draw();
     });
 
-    // Flip buttons
     flipHBtn.addEventListener('click', () => {
         bandana.flipH = !bandana.flipH;
         flipHBtn.style.borderColor = bandana.flipH ? 'var(--accent)' : '';
@@ -305,6 +464,7 @@ function setupPFPGenerator() {
         flipVBtn.style.borderColor = '';
         placeholder.classList.remove('hidden');
         wrap.classList.remove('has-image');
+        setStatus('');
         draw();
     });
 
