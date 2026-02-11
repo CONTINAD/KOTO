@@ -98,152 +98,36 @@ function setupCursorGlow() {
     });
 }
 
-// ===== CHROMA KEY (GREEN SCREEN REMOVAL) =====
-function chromaKey(img) {
-    const c = document.createElement('canvas');
-    c.width = img.naturalWidth;
-    c.height = img.naturalHeight;
-    const cx = c.getContext('2d');
-    cx.drawImage(img, 0, 0);
-    const imageData = cx.getImageData(0, 0, c.width, c.height);
-    const d = imageData.data;
-    for (let i = 0; i < d.length; i += 4) {
-        const r = d[i], g = d[i + 1], b = d[i + 2];
-        const greenDom = g - Math.max(r, b);
-        if (greenDom > 40 && g > 100) {
-            d[i + 3] = 0;
-        } else if (greenDom > 15 && g > 80) {
-            const alpha = Math.max(0, 255 - (greenDom - 15) * 10);
-            d[i + 3] = Math.min(d[i + 3], alpha);
-            d[i + 1] = Math.min(g, Math.max(r, b) + 10);
-        }
-    }
-    cx.putImageData(imageData, 0, 0);
-    const clean = new Image();
-    clean.src = c.toDataURL('image/png');
-    return new Promise(r => { clean.onload = () => r(clean); });
-}
-
-// ===== FACE-API.JS MODEL LOADER =====
-let modelsLoaded = false;
-async function loadFaceModels() {
-    if (modelsLoaded) return;
-    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
-    await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-    ]);
-    modelsLoaded = true;
-}
-
-// ===== PFP BANDANA GENERATOR (AI-POWERED) =====
+// ===== AI PFP GENERATOR =====
 function setupPFPGenerator() {
     const canvas = document.getElementById('pfpCanvas');
     const ctx = canvas.getContext('2d');
-    const wrap = document.querySelector('.pfp-canvas-wrap');
+    const wrap = document.getElementById('pfpWrap');
     const placeholder = document.getElementById('pfpPlaceholder');
+    const loading = document.getElementById('pfpLoading');
     const fileInput = document.getElementById('pfpUpload');
     const uploadBtn = document.getElementById('pfpUploadBtn');
+    const generateBtn = document.getElementById('pfpGenerate');
     const resetBtn = document.getElementById('pfpReset');
     const downloadBtn = document.getElementById('pfpDownload');
-    const sizeSlider = document.getElementById('bandanaSize');
-    const rotationSlider = document.getElementById('bandanaRotation');
-    const flipHBtn = document.getElementById('flipH');
-    const flipVBtn = document.getElementById('flipV');
     const statusEl = document.getElementById('pfpStatus');
 
-    let userImage = null;
-    let bandanaClean = null;
-
-    const bandanaRaw = new Image();
-    bandanaRaw.src = 'images/bandana-overlay.png';
-    bandanaRaw.onload = async () => {
-        bandanaClean = await chromaKey(bandanaRaw);
-        draw();
-    };
-
-    // Bandana state
-    let bandana = { x: 256, y: 380, size: 170, rotation: -8, flipH: false, flipV: false };
-    let isDragging = false;
-    let dragOffset = { x: 0, y: 0 };
-
-    function getCanvasScale() {
-        return canvas.width / canvas.getBoundingClientRect().width;
-    }
+    let userImageBase64 = null;
+    let resultImageUrl = null;
+    let isProcessing = false;
 
     function setStatus(msg) {
         if (statusEl) statusEl.textContent = msg;
     }
 
-    // ===== AI FACE DETECTION WITH FACE-API.JS =====
-    async function detectFaceAI(imgElement) {
-        try {
-            setStatus('🧠 Loading AI model...');
-            await loadFaceModels();
+    // Resize image to 512x512 and return base64
+    function resizeImage(img) {
+        const c = document.createElement('canvas');
+        c.width = 512;
+        c.height = 512;
+        const cx = c.getContext('2d');
 
-            setStatus('🔍 AI scanning face...');
-
-            // face-api needs an image/canvas element to detect from
-            // Create a temp canvas at the image's natural resolution
-            const tmpCanvas = document.createElement('canvas');
-            tmpCanvas.width = imgElement.naturalWidth;
-            tmpCanvas.height = imgElement.naturalHeight;
-            const tmpCtx = tmpCanvas.getContext('2d');
-            tmpCtx.drawImage(imgElement, 0, 0);
-
-            const detection = await faceapi
-                .detectSingleFace(tmpCanvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.3 }))
-                .withFaceLandmarks();
-
-            if (detection) {
-                const landmarks = detection.landmarks;
-                const jaw = landmarks.getJawOutline(); // 17 points along jawline
-                const nose = landmarks.getNose();
-
-                // Key points
-                const leftJaw = jaw[0];       // left side of face
-                const rightJaw = jaw[16];     // right side of face
-                const chin = jaw[8];          // bottom of chin
-                const leftMid = jaw[3];       // left middle jaw
-                const rightMid = jaw[13];     // right middle jaw
-
-                // Face width from jaw endpoints
-                const faceWidth = Math.sqrt(
-                    (rightJaw.x - leftJaw.x) ** 2 +
-                    (rightJaw.y - leftJaw.y) ** 2
-                );
-
-                // Face angle from jaw tilt
-                const faceAngle = Math.atan2(
-                    rightJaw.y - leftJaw.y,
-                    rightJaw.x - leftJaw.x
-                ) * (180 / Math.PI);
-
-                // Bandana center: just below chin
-                const bandanaCenterX = chin.x;
-                const bandanaCenterY = chin.y + faceWidth * 0.12;
-
-                return {
-                    x: bandanaCenterX,
-                    y: bandanaCenterY,
-                    size: faceWidth * 0.8,
-                    rotation: faceAngle,
-                    detected: true
-                };
-            }
-
-            return null;
-        } catch (err) {
-            console.error('Face detection error:', err);
-            return null;
-        }
-    }
-
-    // ===== AUTO-PLACE BANDANA =====
-    async function autoPlaceBandana(img) {
-        const aiResult = await detectFaceAI(img);
-
-        // Get canvas coordinate transform (image may be cropped to square)
+        // Cover crop to square
         const imgRatio = img.naturalWidth / img.naturalHeight;
         let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
         if (imgRatio > 1) {
@@ -253,102 +137,152 @@ function setupPFPGenerator() {
             sy = (img.naturalHeight - img.naturalWidth) / 2;
             sh = img.naturalWidth;
         }
-        const scale = canvas.width / sw;
-
-        if (aiResult && aiResult.detected) {
-            // Transform from image coords to canvas coords
-            bandana.x = (aiResult.x - sx) * scale;
-            bandana.y = (aiResult.y - sy) * scale;
-            bandana.size = Math.max(60, Math.min(400, aiResult.size * scale));
-            bandana.rotation = aiResult.rotation;
-            bandana.flipH = false;
-            bandana.flipV = false;
-
-            sizeSlider.value = bandana.size;
-            rotationSlider.value = Math.round(bandana.rotation);
-
-            setStatus('✅ AI detected face — bandana placed! Drag to fine-tune.');
-        } else {
-            // Fallback: center bottom
-            bandana.x = canvas.width / 2;
-            bandana.y = canvas.height * 0.65;
-            bandana.size = canvas.width * 0.35;
-            bandana.rotation = 0;
-
-            sizeSlider.value = bandana.size;
-            rotationSlider.value = 0;
-
-            setStatus('⚠️ No face found — placed at center. Drag to adjust.');
-        }
-
-        draw();
+        cx.drawImage(img, sx, sy, sw, sh, 0, 0, 512, 512);
+        return c.toDataURL('image/png');
     }
 
-    // ===== DRAWING =====
-    function draw() {
+    // Draw image (either uploaded or result) on canvas
+    function drawImage(src) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        };
+        img.src = src;
+    }
+
+    // Draw uploaded image directly
+    function drawUploadedImage(img) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        if (userImage) {
-            const imgRatio = userImage.width / userImage.height;
-            let sx = 0, sy = 0, sw = userImage.width, sh = userImage.height;
-            if (imgRatio > 1) {
-                sx = (userImage.width - userImage.height) / 2;
-                sw = userImage.height;
-            } else {
-                sy = (userImage.height - userImage.width) / 2;
-                sh = userImage.width;
-            }
-            ctx.drawImage(userImage, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+        const imgRatio = img.naturalWidth / img.naturalHeight;
+        let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+        if (imgRatio > 1) {
+            sx = (img.naturalWidth - img.naturalHeight) / 2;
+            sw = img.naturalHeight;
         } else {
-            ctx.fillStyle = '#12121a';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            sy = (img.naturalHeight - img.naturalWidth) / 2;
+            sh = img.naturalWidth;
         }
-
-        // Draw bandana with rotation and transforms
-        const bImg = bandanaClean || bandanaRaw;
-        if (bImg && bImg.complete && bImg.naturalWidth > 0) {
-            ctx.save();
-            ctx.translate(bandana.x, bandana.y);
-            ctx.rotate((bandana.rotation * Math.PI) / 180);
-            ctx.scale(bandana.flipH ? -1 : 1, bandana.flipV ? -1 : 1);
-
-            const aspect = bImg.naturalWidth / bImg.naturalHeight;
-            const w = bandana.size;
-            const h = w / aspect;
-            ctx.drawImage(bImg, -w / 2, -h / 2, w, h);
-            ctx.restore();
-        }
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     }
 
-    // ===== FILE HANDLING =====
-    async function handleFile(file) {
+    // Handle file upload
+    function handleFile(file) {
         if (!file || !file.type.startsWith('image/')) return;
-        setStatus('⏳ Loading image...');
+
         const reader = new FileReader();
         reader.onload = (e) => {
             const img = new Image();
-            img.onload = async () => {
-                userImage = img;
+            img.onload = () => {
+                // Show uploaded image on canvas
+                drawUploadedImage(img);
                 placeholder.classList.add('hidden');
                 wrap.classList.add('has-image');
-                draw();
-                await autoPlaceBandana(img);
+
+                // Store resized base64 for API
+                userImageBase64 = resizeImage(img);
+
+                // Enable generate button
+                generateBtn.disabled = false;
+                downloadBtn.disabled = true;
+                resultImageUrl = null;
+
+                setStatus('📸 Image loaded — click "Add Scarf with AI" to generate!');
             };
             img.src = e.target.result;
         };
         reader.readAsDataURL(file);
     }
 
-    // Click canvas to upload
-    wrap.addEventListener('click', (e) => {
-        if (!isDragging) fileInput.click();
+    // ===== AI GENERATION =====
+    async function generateWithAI() {
+        if (!userImageBase64 || isProcessing) return;
+
+        isProcessing = true;
+        generateBtn.disabled = true;
+        loading.classList.remove('hidden');
+        setStatus('🧠 Sending to AI...');
+
+        try {
+            // Step 1: Start the prediction
+            const startRes = await fetch('/.netlify/functions/generate-pfp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: userImageBase64 }),
+            });
+
+            const startData = await startRes.json();
+
+            if (startData.error) {
+                throw new Error(startData.error);
+            }
+
+            setStatus('⏳ AI is working on it...');
+
+            // Step 2: Poll for result
+            const predictionId = startData.id;
+            let result = null;
+            let attempts = 0;
+            const maxAttempts = 60; // 2 minutes max
+
+            while (attempts < maxAttempts) {
+                await new Promise(r => setTimeout(r, 2000));
+                attempts++;
+
+                const checkRes = await fetch(`/.netlify/functions/check-pfp?id=${predictionId}`);
+                const checkData = await checkRes.json();
+
+                if (checkData.status === 'succeeded') {
+                    result = checkData.output;
+                    break;
+                } else if (checkData.status === 'failed') {
+                    throw new Error(checkData.error || 'AI generation failed');
+                }
+
+                // Update status with progress dots
+                const dots = '.'.repeat((attempts % 3) + 1);
+                setStatus(`⏳ AI is working${dots} (${attempts * 2}s)`);
+            }
+
+            if (!result) {
+                throw new Error('Generation timed out');
+            }
+
+            // Step 3: Show result
+            // instruct-pix2pix returns an array of output URLs
+            const outputUrl = Array.isArray(result) ? result[result.length - 1] : result;
+            resultImageUrl = outputUrl;
+
+            drawImage(outputUrl);
+            downloadBtn.disabled = false;
+            setStatus('✅ Done! Your scarfed PFP is ready to download.');
+
+        } catch (err) {
+            console.error('AI generation error:', err);
+            setStatus(`❌ Error: ${err.message}`);
+
+            // Re-draw original
+            if (userImageBase64) drawImage(userImageBase64);
+        } finally {
+            isProcessing = false;
+            generateBtn.disabled = false;
+            loading.classList.add('hidden');
+        }
+    }
+
+    // ===== EVENT LISTENERS =====
+
+    // Upload click
+    wrap.addEventListener('click', () => {
+        if (!isProcessing) fileInput.click();
     });
     uploadBtn.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', (e) => {
         if (e.target.files[0]) handleFile(e.target.files[0]);
     });
 
-    // Drag & drop file
+    // Drag & drop
     wrap.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); });
     wrap.addEventListener('drop', (e) => {
         e.preventDefault();
@@ -356,133 +290,56 @@ function setupPFPGenerator() {
         if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
     });
 
-    // ===== BANDANA DRAGGING =====
-    function getHitSize() {
-        const bImg = bandanaClean || bandanaRaw;
-        if (!bImg) return { w: bandana.size, h: bandana.size };
-        const aspect = bImg.naturalWidth / bImg.naturalHeight;
-        return { w: bandana.size, h: bandana.size / aspect };
-    }
+    // Generate
+    generateBtn.addEventListener('click', generateWithAI);
 
-    canvas.addEventListener('mousedown', (e) => {
-        if (!userImage) return;
-        const scale = getCanvasScale();
-        const rect = canvas.getBoundingClientRect();
-        const mx = (e.clientX - rect.left) * scale;
-        const my = (e.clientY - rect.top) * scale;
-        const { w, h } = getHitSize();
-        const dx = mx - bandana.x;
-        const dy = my - bandana.y;
-        if (Math.abs(dx) < w / 2 + 30 && Math.abs(dy) < h / 2 + 30) {
-            isDragging = true;
-            dragOffset.x = dx;
-            dragOffset.y = dy;
-            e.preventDefault();
-            e.stopPropagation();
-        }
-    });
-
-    window.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        const scale = getCanvasScale();
-        const rect = canvas.getBoundingClientRect();
-        bandana.x = (e.clientX - rect.left) * scale - dragOffset.x;
-        bandana.y = (e.clientY - rect.top) * scale - dragOffset.y;
-        draw();
-    });
-    window.addEventListener('mouseup', () => { isDragging = false; });
-
-    // Touch
-    canvas.addEventListener('touchstart', (e) => {
-        if (!userImage) return;
-        const touch = e.touches[0];
-        const scale = getCanvasScale();
-        const rect = canvas.getBoundingClientRect();
-        const mx = (touch.clientX - rect.left) * scale;
-        const my = (touch.clientY - rect.top) * scale;
-        const { w, h } = getHitSize();
-        const dx = mx - bandana.x;
-        const dy = my - bandana.y;
-        if (Math.abs(dx) < w / 2 + 30 && Math.abs(dy) < h / 2 + 30) {
-            isDragging = true;
-            dragOffset.x = dx;
-            dragOffset.y = dy;
-            e.preventDefault();
-            e.stopPropagation();
-        }
-    }, { passive: false });
-
-    canvas.addEventListener('touchmove', (e) => {
-        if (!isDragging) return;
-        e.preventDefault();
-        const touch = e.touches[0];
-        const scale = getCanvasScale();
-        const rect = canvas.getBoundingClientRect();
-        bandana.x = (touch.clientX - rect.left) * scale - dragOffset.x;
-        bandana.y = (touch.clientY - rect.top) * scale - dragOffset.y;
-        draw();
-    }, { passive: false });
-    canvas.addEventListener('touchend', () => { isDragging = false; });
-
-    // ===== CONTROLS =====
-    sizeSlider.addEventListener('input', () => { bandana.size = parseInt(sizeSlider.value); draw(); });
-    rotationSlider.addEventListener('input', () => { bandana.rotation = parseInt(rotationSlider.value); draw(); });
-
-    flipHBtn.addEventListener('click', () => {
-        bandana.flipH = !bandana.flipH;
-        flipHBtn.style.borderColor = bandana.flipH ? 'var(--accent)' : '';
-        draw();
-    });
-    flipVBtn.addEventListener('click', () => {
-        bandana.flipV = !bandana.flipV;
-        flipVBtn.style.borderColor = bandana.flipV ? 'var(--accent)' : '';
-        draw();
-    });
-
-    // Reset — reload KOTO demo
+    // Reset
     resetBtn.addEventListener('click', () => {
-        flipHBtn.style.borderColor = '';
-        flipVBtn.style.borderColor = '';
-        loadDemo();
+        userImageBase64 = null;
+        resultImageUrl = null;
+        isProcessing = false;
+        generateBtn.disabled = true;
+        downloadBtn.disabled = true;
+        placeholder.classList.remove('hidden');
+        loading.classList.add('hidden');
+        wrap.classList.remove('has-image');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#12121a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        setStatus('');
     });
 
     // Download
-    downloadBtn.addEventListener('click', () => {
-        if (!userImage) { alert('Upload an image first!'); return; }
-        const link = document.createElement('a');
-        link.download = 'koto-pfp.png';
-        link.href = canvas.toDataURL('image/png');
-        link.click();
+    downloadBtn.addEventListener('click', async () => {
+        if (resultImageUrl) {
+            // If we have a URL from the API, fetch it and download
+            try {
+                const response = await fetch(resultImageUrl);
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.download = 'koto-pfp.png';
+                link.href = url;
+                link.click();
+                URL.revokeObjectURL(url);
+            } catch {
+                // Fallback: download from canvas
+                const link = document.createElement('a');
+                link.download = 'koto-pfp.png';
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+            }
+        } else {
+            const link = document.createElement('a');
+            link.download = 'koto-pfp.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        }
     });
 
-    // ===== DEMO PRELOAD =====
-    function loadDemo() {
-        const demoImg = new Image();
-        demoImg.src = 'images/koto-closeup.png';
-        demoImg.onload = () => {
-            userImage = demoImg;
-            placeholder.classList.add('hidden');
-            wrap.classList.add('has-image');
-            // Manually tuned position for KOTO
-            bandana.x = 280; bandana.y = 400;
-            bandana.size = 170; bandana.rotation = -8;
-            bandana.flipH = false; bandana.flipV = false;
-            sizeSlider.value = 170;
-            rotationSlider.value = -8;
-            setStatus('🧣 This is KOTO! Upload your own pic to get your scarf.');
-            draw();
-        };
-    }
-    loadDemo();
-
-    // Pre-load AI models in background
-    loadFaceModels().then(() => {
-        console.log('Face AI models ready');
-    }).catch(err => {
-        console.warn('Could not preload face models:', err);
-    });
-
-    draw();
+    // Init canvas bg
+    ctx.fillStyle = '#12121a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
 // ===== INIT =====

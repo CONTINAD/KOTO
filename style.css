@@ -845,8 +845,72 @@ img {
     flex-wrap: wrap;
 }
 
+.pfp-generate {
+    flex: 1;
+    background: linear-gradient(135deg, var(--accent), #ff6b35) !important;
+    font-weight: 700 !important;
+    font-size: 15px !important;
+    letter-spacing: 0.5px;
+}
+
+.pfp-generate:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    filter: grayscale(0.5);
+}
+
+.pfp-download:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
 .pfp-download {
     flex: 1;
+}
+
+/* Loading overlay */
+.pfp-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(8px);
+    border-radius: var(--radius-lg);
+    z-index: 10;
+    gap: 12px;
+}
+
+.pfp-loading.hidden {
+    display: none;
+}
+
+.pfp-loading p {
+    color: #fff;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.pfp-loading-sub {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.pfp-spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(255, 255, 255, 0.15);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .pfp-hint {

@@ -223,49 +223,45 @@
     <section class="pfp-section" id="pfp-generator">
         <div class="container">
             <div class="section-header">
-                <span class="section-badge">🎨 PFP Maker</span>
+                <span class="section-badge">🧠 AI PFP Maker</span>
                 <h2 class="section-title">Get Your <span class="accent">Scarf</span></h2>
-                <p class="section-subtitle">Upload your PFP, slap a bandana on it, and rep $KOTO. Here's the OG
-                    dogwifscarf himself.</p>
+                <p class="section-subtitle">Upload any image and our AI will put a red bandana scarf on it — just like
+                    KOTO.</p>
             </div>
             <div class="pfp-generator">
-                <div class="pfp-canvas-wrap">
+                <div class="pfp-canvas-wrap" id="pfpWrap">
                     <canvas id="pfpCanvas" width="512" height="512"></canvas>
                     <div class="pfp-placeholder" id="pfpPlaceholder">
                         <div class="pfp-placeholder-icon">📸</div>
                         <p>Drop your image here or click to upload</p>
                         <span class="pfp-placeholder-hint">Supports JPG, PNG, WebP</span>
                     </div>
+                    <div class="pfp-loading hidden" id="pfpLoading">
+                        <div class="pfp-spinner"></div>
+                        <p>AI is adding the scarf...</p>
+                        <span class="pfp-loading-sub">This takes 10-20 seconds</span>
+                    </div>
                     <input type="file" id="pfpUpload" accept="image/*" hidden>
                 </div>
                 <div class="pfp-controls">
-                    <div class="pfp-control-group">
-                        <label>Bandana Size</label>
-                        <input type="range" id="bandanaSize" min="50" max="400" value="180" class="pfp-slider">
-                    </div>
-                    <div class="pfp-control-group">
-                        <label>Rotation</label>
-                        <input type="range" id="bandanaRotation" min="-180" max="180" value="0" class="pfp-slider">
-                    </div>
-                    <div class="pfp-control-group">
-                        <label>Flip</label>
-                        <div class="pfp-flip-btns">
-                            <button class="btn btn-outline pfp-btn" id="flipH">↔ Horizontal</button>
-                            <button class="btn btn-outline pfp-btn" id="flipV">↕ Vertical</button>
-                        </div>
-                    </div>
                     <div class="pfp-actions">
                         <button class="btn btn-outline pfp-btn" id="pfpUploadBtn">📸 Upload Image</button>
-                        <button class="btn btn-outline pfp-btn" id="pfpReset">🔄 Reset</button>
-                        <button class="btn btn-primary pfp-btn pfp-download" id="pfpDownload">⬇ Download PFP</button>
+                        <button class="btn btn-primary pfp-btn pfp-generate" id="pfpGenerate" disabled>🧠 Add Scarf with
+                            AI</button>
                     </div>
-                    <p class="pfp-hint">🧠 AI-powered face detection — automatically finds your face and places the
-                        bandana. Fine-tune with the sliders.</p>
+                    <div class="pfp-actions">
+                        <button class="btn btn-outline pfp-btn" id="pfpReset">🔄 Reset</button>
+                        <button class="btn btn-primary pfp-btn pfp-download" id="pfpDownload" disabled>⬇ Download
+                            PFP</button>
+                    </div>
+                    <p class="pfp-hint">🧠 Powered by AI — the scarf gets generated directly onto your image. No manual
+                        editing needed.</p>
                     <p class="pfp-status" id="pfpStatus"></p>
                 </div>
             </div>
         </div>
     </section>
+
 
     <!-- Community Section -->
     <section class="community" id="community">
@@ -379,7 +375,6 @@
         </div>
     </footer>
 
-    <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
     <script src="script.js"></script>
 </body>
 
