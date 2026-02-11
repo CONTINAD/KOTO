@@ -98,8 +98,8 @@ function setupCursorGlow() {
     });
 }
 
-// ===== GREEN SCREEN REMOVAL FROM BANDANA =====
-function removeCheckerboard(img) {
+// ===== CHROMA KEY (GREEN SCREEN REMOVAL) =====
+function chromaKey(img) {
     const c = document.createElement('canvas');
     c.width = img.naturalWidth;
     c.height = img.naturalHeight;
@@ -107,35 +107,36 @@ function removeCheckerboard(img) {
     cx.drawImage(img, 0, 0);
     const imageData = cx.getImageData(0, 0, c.width, c.height);
     const d = imageData.data;
-
     for (let i = 0; i < d.length; i += 4) {
         const r = d[i], g = d[i + 1], b = d[i + 2];
-
-        // Green screen detection: green channel significantly higher than red and blue
-        const greenDominance = g - Math.max(r, b);
-
-        if (greenDominance > 40 && g > 100) {
-            // Pure green → fully transparent
+        const greenDom = g - Math.max(r, b);
+        if (greenDom > 40 && g > 100) {
             d[i + 3] = 0;
-        } else if (greenDominance > 15 && g > 80) {
-            // Edge pixels — partial transparency for anti-aliasing
-            const alpha = Math.max(0, 255 - (greenDominance - 15) * 10);
+        } else if (greenDom > 15 && g > 80) {
+            const alpha = Math.max(0, 255 - (greenDom - 15) * 10);
             d[i + 3] = Math.min(d[i + 3], alpha);
-            // Remove green spill from edge pixels
             d[i + 1] = Math.min(g, Math.max(r, b) + 10);
         }
     }
-
     cx.putImageData(imageData, 0, 0);
-
-    const cleanImg = new Image();
-    cleanImg.src = c.toDataURL('image/png');
-    return new Promise(resolve => {
-        cleanImg.onload = () => resolve(cleanImg);
-    });
+    const clean = new Image();
+    clean.src = c.toDataURL('image/png');
+    return new Promise(r => { clean.onload = () => r(clean); });
 }
 
-// ===== PFP BANDANA GENERATOR =====
+// ===== FACE-API.JS MODEL LOADER =====
+let modelsLoaded = false;
+async function loadFaceModels() {
+    if (modelsLoaded) return;
+    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+    await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+    ]);
+    modelsLoaded = true;
+}
+
+// ===== PFP BANDANA GENERATOR (AI-POWERED) =====
 function setupPFPGenerator() {
     const canvas = document.getElementById('pfpCanvas');
     const ctx = canvas.getContext('2d');
@@ -152,44 +153,17 @@ function setupPFPGenerator() {
     const statusEl = document.getElementById('pfpStatus');
 
     let userImage = null;
-    let bandanaClean = null; // processed bandana with transparency
+    let bandanaClean = null;
 
-    // Load and process bandana
     const bandanaRaw = new Image();
     bandanaRaw.src = 'images/bandana-overlay.png';
     bandanaRaw.onload = async () => {
-        bandanaClean = await removeCheckerboard(bandanaRaw);
+        bandanaClean = await chromaKey(bandanaRaw);
         draw();
     };
 
-    // Default bandana position — tuned to sit on KOTO's neck in the demo
-    const DEMO_BANDANA = {
-        x: 280, y: 400,
-        size: 170,
-        rotation: -8,
-        flipH: false,
-        flipV: false
-    };
-
-    let bandana = { ...DEMO_BANDANA };
-
-    // Auto-load KOTO dog as demo on page load
-    function loadDemo() {
-        const demoImg = new Image();
-        demoImg.src = 'images/koto-closeup.png';
-        demoImg.onload = () => {
-            userImage = demoImg;
-            placeholder.classList.add('hidden');
-            wrap.classList.add('has-image');
-            bandana = { ...DEMO_BANDANA };
-            sizeSlider.value = bandana.size;
-            rotationSlider.value = bandana.rotation;
-            setStatus('🧣 This is KOTO! Upload your own pic to get your scarf.');
-            draw();
-        };
-    }
-    loadDemo();
-
+    // Bandana state
+    let bandana = { x: 256, y: 380, size: 170, rotation: -8, flipH: false, flipV: false };
     let isDragging = false;
     let dragOffset = { x: 0, y: 0 };
 
@@ -201,79 +175,75 @@ function setupPFPGenerator() {
         if (statusEl) statusEl.textContent = msg;
     }
 
-    // ===== FACE DETECTION =====
-    async function detectFace(img) {
-        // Try browser's FaceDetector API (Chrome/Edge)
-        if ('FaceDetector' in window) {
-            try {
-                const detector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
-                const faces = await detector.detect(img);
-                if (faces.length > 0) {
-                    return { box: faces[0].boundingBox, method: 'api' };
-                }
-            } catch (e) {
-                console.log('FaceDetector failed:', e);
-            }
-        }
+    // ===== AI FACE DETECTION WITH FACE-API.JS =====
+    async function detectFaceAI(imgElement) {
+        try {
+            setStatus('🧠 Loading AI model...');
+            await loadFaceModels();
 
-        // Fallback: find the dominant subject area using edge/contrast detection
-        return { box: findSubjectArea(img), method: 'heuristic' };
+            setStatus('🔍 AI scanning face...');
+
+            // face-api needs an image/canvas element to detect from
+            // Create a temp canvas at the image's natural resolution
+            const tmpCanvas = document.createElement('canvas');
+            tmpCanvas.width = imgElement.naturalWidth;
+            tmpCanvas.height = imgElement.naturalHeight;
+            const tmpCtx = tmpCanvas.getContext('2d');
+            tmpCtx.drawImage(imgElement, 0, 0);
+
+            const detection = await faceapi
+                .detectSingleFace(tmpCanvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.3 }))
+                .withFaceLandmarks();
+
+            if (detection) {
+                const landmarks = detection.landmarks;
+                const jaw = landmarks.getJawOutline(); // 17 points along jawline
+                const nose = landmarks.getNose();
+
+                // Key points
+                const leftJaw = jaw[0];       // left side of face
+                const rightJaw = jaw[16];     // right side of face
+                const chin = jaw[8];          // bottom of chin
+                const leftMid = jaw[3];       // left middle jaw
+                const rightMid = jaw[13];     // right middle jaw
+
+                // Face width from jaw endpoints
+                const faceWidth = Math.sqrt(
+                    (rightJaw.x - leftJaw.x) ** 2 +
+                    (rightJaw.y - leftJaw.y) ** 2
+                );
+
+                // Face angle from jaw tilt
+                const faceAngle = Math.atan2(
+                    rightJaw.y - leftJaw.y,
+                    rightJaw.x - leftJaw.x
+                ) * (180 / Math.PI);
+
+                // Bandana center: just below chin
+                const bandanaCenterX = chin.x;
+                const bandanaCenterY = chin.y + faceWidth * 0.12;
+
+                return {
+                    x: bandanaCenterX,
+                    y: bandanaCenterY,
+                    size: faceWidth * 0.8,
+                    rotation: faceAngle,
+                    detected: true
+                };
+            }
+
+            return null;
+        } catch (err) {
+            console.error('Face detection error:', err);
+            return null;
+        }
     }
 
-    function findSubjectArea(img) {
-        const size = 150;
-        const c = document.createElement('canvas');
-        c.width = size;
-        c.height = size;
-        const cx = c.getContext('2d');
-        cx.drawImage(img, 0, 0, size, size);
-        const data = cx.getImageData(0, 0, size, size).data;
-
-        // Find the vertical center of brightness/contrast changes
-        // This usually corresponds to where the face/subject is
-        let colIntensity = new Array(size).fill(0);
-        let rowIntensity = new Array(size).fill(0);
-
-        for (let y = 0; y < size; y++) {
-            for (let x = 0; x < size; x++) {
-                const i = (y * size + x) * 4;
-                const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
-                // Weight center pixels more heavily (subjects are usually centered)
-                const centerWeight = 1 + 2 * Math.exp(-((x - size / 2) ** 2 + (y - size / 2) ** 2) / (size * size * 0.15));
-                colIntensity[x] += brightness * centerWeight;
-                rowIntensity[y] += brightness * centerWeight;
-            }
-        }
-
-        // Find the peak region (highest intensity = likely the subject)
-        let peakX = size / 2, peakY = size * 0.35;
-        let maxRow = 0;
-        for (let y = Math.floor(size * 0.1); y < Math.floor(size * 0.7); y++) {
-            if (rowIntensity[y] > maxRow) {
-                maxRow = rowIntensity[y];
-                peakY = y;
-            }
-        }
-
-        const scale = img.naturalWidth / size;
-        // Estimate face as the center ~40% of image, near the peak
-        const faceW = img.naturalWidth * 0.45;
-        const faceH = img.naturalHeight * 0.45;
-        return {
-            x: (img.naturalWidth - faceW) / 2,
-            y: peakY * scale - faceH * 0.2,
-            width: faceW,
-            height: faceH
-        };
-    }
-
+    // ===== AUTO-PLACE BANDANA =====
     async function autoPlaceBandana(img) {
-        setStatus('🔍 Detecting face...');
+        const aiResult = await detectFaceAI(img);
 
-        const result = await detectFace(img);
-        const faceBox = result.box;
-
-        // Transform face coords to canvas coords (accounting for square crop)
+        // Get canvas coordinate transform (image may be cropped to square)
         const imgRatio = img.naturalWidth / img.naturalHeight;
         let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
         if (imgRatio > 1) {
@@ -283,28 +253,32 @@ function setupPFPGenerator() {
             sy = (img.naturalHeight - img.naturalWidth) / 2;
             sh = img.naturalWidth;
         }
+        const scale = canvas.width / sw;
 
-        const scaleToCanvas = canvas.width / sw;
-        const faceCX = (faceBox.x + faceBox.width / 2 - sx) * scaleToCanvas;
-        const faceCY = (faceBox.y - sy) * scaleToCanvas;
-        const faceW = faceBox.width * scaleToCanvas;
-        const faceH = faceBox.height * scaleToCanvas;
+        if (aiResult && aiResult.detected) {
+            // Transform from image coords to canvas coords
+            bandana.x = (aiResult.x - sx) * scale;
+            bandana.y = (aiResult.y - sy) * scale;
+            bandana.size = Math.max(60, Math.min(400, aiResult.size * scale));
+            bandana.rotation = aiResult.rotation;
+            bandana.flipH = false;
+            bandana.flipV = false;
 
-        // Place bandana at the chin/neck — bottom of face box
-        bandana.x = faceCX;
-        bandana.y = faceCY + faceH * 0.9;
-        bandana.size = Math.max(60, Math.min(350, faceW * 0.75));
-        bandana.rotation = 0;
-        bandana.flipH = false;
-        bandana.flipV = false;
+            sizeSlider.value = bandana.size;
+            rotationSlider.value = Math.round(bandana.rotation);
 
-        sizeSlider.value = bandana.size;
-        rotationSlider.value = 0;
-
-        if (result.method === 'api') {
-            setStatus('✅ Face detected! Bandana placed. Drag to fine-tune.');
+            setStatus('✅ AI detected face — bandana placed! Drag to fine-tune.');
         } else {
-            setStatus('✅ Bandana placed! Drag to fine-tune.');
+            // Fallback: center bottom
+            bandana.x = canvas.width / 2;
+            bandana.y = canvas.height * 0.65;
+            bandana.size = canvas.width * 0.35;
+            bandana.rotation = 0;
+
+            sizeSlider.value = bandana.size;
+            rotationSlider.value = 0;
+
+            setStatus('⚠️ No face found — placed at center. Drag to adjust.');
         }
 
         draw();
@@ -330,7 +304,7 @@ function setupPFPGenerator() {
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
 
-        // Draw bandana
+        // Draw bandana with rotation and transforms
         const bImg = bandanaClean || bandanaRaw;
         if (bImg && bImg.complete && bImg.naturalWidth > 0) {
             ctx.save();
@@ -350,7 +324,6 @@ function setupPFPGenerator() {
     async function handleFile(file) {
         if (!file || !file.type.startsWith('image/')) return;
         setStatus('⏳ Loading image...');
-
         const reader = new FileReader();
         reader.onload = (e) => {
             const img = new Image();
@@ -366,6 +339,7 @@ function setupPFPGenerator() {
         reader.readAsDataURL(file);
     }
 
+    // Click canvas to upload
     wrap.addEventListener('click', (e) => {
         if (!isDragging) fileInput.click();
     });
@@ -374,6 +348,7 @@ function setupPFPGenerator() {
         if (e.target.files[0]) handleFile(e.target.files[0]);
     });
 
+    // Drag & drop file
     wrap.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); });
     wrap.addEventListener('drop', (e) => {
         e.preventDefault();
@@ -383,8 +358,8 @@ function setupPFPGenerator() {
 
     // ===== BANDANA DRAGGING =====
     function getHitSize() {
-        if (!bandanaClean && !bandanaRaw) return { w: bandana.size, h: bandana.size };
         const bImg = bandanaClean || bandanaRaw;
+        if (!bImg) return { w: bandana.size, h: bandana.size };
         const aspect = bImg.naturalWidth / bImg.naturalHeight;
         return { w: bandana.size, h: bandana.size / aspect };
     }
@@ -398,12 +373,12 @@ function setupPFPGenerator() {
         const { w, h } = getHitSize();
         const dx = mx - bandana.x;
         const dy = my - bandana.y;
-
         if (Math.abs(dx) < w / 2 + 30 && Math.abs(dy) < h / 2 + 30) {
             isDragging = true;
             dragOffset.x = dx;
             dragOffset.y = dy;
             e.preventDefault();
+            e.stopPropagation();
         }
     });
 
@@ -415,7 +390,6 @@ function setupPFPGenerator() {
         bandana.y = (e.clientY - rect.top) * scale - dragOffset.y;
         draw();
     });
-
     window.addEventListener('mouseup', () => { isDragging = false; });
 
     // Touch
@@ -434,6 +408,7 @@ function setupPFPGenerator() {
             dragOffset.x = dx;
             dragOffset.y = dy;
             e.preventDefault();
+            e.stopPropagation();
         }
     }, { passive: false });
 
@@ -447,7 +422,6 @@ function setupPFPGenerator() {
         bandana.y = (touch.clientY - rect.top) * scale - dragOffset.y;
         draw();
     }, { passive: false });
-
     canvas.addEventListener('touchend', () => { isDragging = false; });
 
     // ===== CONTROLS =====
@@ -465,18 +439,47 @@ function setupPFPGenerator() {
         draw();
     });
 
+    // Reset — reload KOTO demo
     resetBtn.addEventListener('click', () => {
         flipHBtn.style.borderColor = '';
         flipVBtn.style.borderColor = '';
-        loadDemo(); // Reset back to KOTO demo
+        loadDemo();
     });
 
+    // Download
     downloadBtn.addEventListener('click', () => {
         if (!userImage) { alert('Upload an image first!'); return; }
         const link = document.createElement('a');
         link.download = 'koto-pfp.png';
         link.href = canvas.toDataURL('image/png');
         link.click();
+    });
+
+    // ===== DEMO PRELOAD =====
+    function loadDemo() {
+        const demoImg = new Image();
+        demoImg.src = 'images/koto-closeup.png';
+        demoImg.onload = () => {
+            userImage = demoImg;
+            placeholder.classList.add('hidden');
+            wrap.classList.add('has-image');
+            // Manually tuned position for KOTO
+            bandana.x = 280; bandana.y = 400;
+            bandana.size = 170; bandana.rotation = -8;
+            bandana.flipH = false; bandana.flipV = false;
+            sizeSlider.value = 170;
+            rotationSlider.value = -8;
+            setStatus('🧣 This is KOTO! Upload your own pic to get your scarf.');
+            draw();
+        };
+    }
+    loadDemo();
+
+    // Pre-load AI models in background
+    loadFaceModels().then(() => {
+        console.log('Face AI models ready');
+    }).catch(err => {
+        console.warn('Could not preload face models:', err);
     });
 
     draw();
