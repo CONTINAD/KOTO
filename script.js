@@ -156,7 +156,6 @@ function setupPFPGenerator() {
 
     // Load and process bandana
     const bandanaRaw = new Image();
-    bandanaRaw.crossOrigin = 'anonymous';
     bandanaRaw.src = 'images/bandana-overlay.png';
     bandanaRaw.onload = async () => {
         bandanaClean = await removeCheckerboard(bandanaRaw);
@@ -177,7 +176,6 @@ function setupPFPGenerator() {
     // Auto-load KOTO dog as demo on page load
     function loadDemo() {
         const demoImg = new Image();
-        demoImg.crossOrigin = 'anonymous';
         demoImg.src = 'images/koto-closeup.png';
         demoImg.onload = () => {
             userImage = demoImg;
