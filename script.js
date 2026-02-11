@@ -163,13 +163,34 @@ function setupPFPGenerator() {
         draw();
     };
 
-    let bandana = {
-        x: 256, y: 320,
-        size: 160,
-        rotation: 0,
+    // Default bandana position — tuned to sit on KOTO's neck in the demo
+    const DEMO_BANDANA = {
+        x: 280, y: 400,
+        size: 170,
+        rotation: -8,
         flipH: false,
         flipV: false
     };
+
+    let bandana = { ...DEMO_BANDANA };
+
+    // Auto-load KOTO dog as demo on page load
+    function loadDemo() {
+        const demoImg = new Image();
+        demoImg.crossOrigin = 'anonymous';
+        demoImg.src = 'images/koto-closeup.png';
+        demoImg.onload = () => {
+            userImage = demoImg;
+            placeholder.classList.add('hidden');
+            wrap.classList.add('has-image');
+            bandana = { ...DEMO_BANDANA };
+            sizeSlider.value = bandana.size;
+            rotationSlider.value = bandana.rotation;
+            setStatus('🧣 This is KOTO! Upload your own pic to get your scarf.');
+            draw();
+        };
+    }
+    loadDemo();
 
     let isDragging = false;
     let dragOffset = { x: 0, y: 0 };
@@ -348,7 +369,7 @@ function setupPFPGenerator() {
     }
 
     wrap.addEventListener('click', (e) => {
-        if (!userImage && !isDragging) fileInput.click();
+        if (!isDragging) fileInput.click();
     });
     uploadBtn.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', (e) => {
@@ -447,16 +468,9 @@ function setupPFPGenerator() {
     });
 
     resetBtn.addEventListener('click', () => {
-        userImage = null;
-        bandana = { x: 256, y: 320, size: 160, rotation: 0, flipH: false, flipV: false };
-        sizeSlider.value = 160;
-        rotationSlider.value = 0;
         flipHBtn.style.borderColor = '';
         flipVBtn.style.borderColor = '';
-        placeholder.classList.remove('hidden');
-        wrap.classList.remove('has-image');
-        setStatus('');
-        draw();
+        loadDemo(); // Reset back to KOTO demo
     });
 
     downloadBtn.addEventListener('click', () => {
