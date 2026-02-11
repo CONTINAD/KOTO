@@ -98,7 +98,44 @@ function setupCursorGlow() {
     });
 }
 
-// ===== PFP BANDANA GENERATOR (AUTO-DETECT) =====
+// ===== GREEN SCREEN REMOVAL FROM BANDANA =====
+function removeCheckerboard(img) {
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const cx = c.getContext('2d');
+    cx.drawImage(img, 0, 0);
+    const imageData = cx.getImageData(0, 0, c.width, c.height);
+    const d = imageData.data;
+
+    for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+
+        // Green screen detection: green channel significantly higher than red and blue
+        const greenDominance = g - Math.max(r, b);
+
+        if (greenDominance > 40 && g > 100) {
+            // Pure green → fully transparent
+            d[i + 3] = 0;
+        } else if (greenDominance > 15 && g > 80) {
+            // Edge pixels — partial transparency for anti-aliasing
+            const alpha = Math.max(0, 255 - (greenDominance - 15) * 10);
+            d[i + 3] = Math.min(d[i + 3], alpha);
+            // Remove green spill from edge pixels
+            d[i + 1] = Math.min(g, Math.max(r, b) + 10);
+        }
+    }
+
+    cx.putImageData(imageData, 0, 0);
+
+    const cleanImg = new Image();
+    cleanImg.src = c.toDataURL('image/png');
+    return new Promise(resolve => {
+        cleanImg.onload = () => resolve(cleanImg);
+    });
+}
+
+// ===== PFP BANDANA GENERATOR =====
 function setupPFPGenerator() {
     const canvas = document.getElementById('pfpCanvas');
     const ctx = canvas.getContext('2d');
@@ -115,14 +152,20 @@ function setupPFPGenerator() {
     const statusEl = document.getElementById('pfpStatus');
 
     let userImage = null;
-    let bandanaImage = new Image();
-    bandanaImage.crossOrigin = 'anonymous';
-    bandanaImage.src = 'images/bandana-overlay.png';
+    let bandanaClean = null; // processed bandana with transparency
 
-    // Bandana state
+    // Load and process bandana
+    const bandanaRaw = new Image();
+    bandanaRaw.crossOrigin = 'anonymous';
+    bandanaRaw.src = 'images/bandana-overlay.png';
+    bandanaRaw.onload = async () => {
+        bandanaClean = await removeCheckerboard(bandanaRaw);
+        draw();
+    };
+
     let bandana = {
         x: 256, y: 320,
-        size: 180,
+        size: 160,
         rotation: 0,
         flipH: false,
         flipV: false
@@ -141,152 +184,108 @@ function setupPFPGenerator() {
 
     // ===== FACE DETECTION =====
     async function detectFace(img) {
-        // Method 1: Browser FaceDetector API (Chrome/Edge)
+        // Try browser's FaceDetector API (Chrome/Edge)
         if ('FaceDetector' in window) {
             try {
                 const detector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
                 const faces = await detector.detect(img);
                 if (faces.length > 0) {
-                    return faces[0].boundingBox;
+                    return { box: faces[0].boundingBox, method: 'api' };
                 }
             } catch (e) {
-                console.log('FaceDetector API failed, using heuristic', e);
+                console.log('FaceDetector failed:', e);
             }
         }
 
-        // Method 2: Smart heuristic - analyze skin tone regions
-        return detectFaceHeuristic(img);
+        // Fallback: find the dominant subject area using edge/contrast detection
+        return { box: findSubjectArea(img), method: 'heuristic' };
     }
 
-    function detectFaceHeuristic(img) {
-        // Use a temporary canvas to analyze the image
-        const tmpCanvas = document.createElement('canvas');
-        const tmpCtx = tmpCanvas.getContext('2d');
-        const analysisSize = 200; // small for speed
-        tmpCanvas.width = analysisSize;
-        tmpCanvas.height = analysisSize;
+    function findSubjectArea(img) {
+        const size = 150;
+        const c = document.createElement('canvas');
+        c.width = size;
+        c.height = size;
+        const cx = c.getContext('2d');
+        cx.drawImage(img, 0, 0, size, size);
+        const data = cx.getImageData(0, 0, size, size).data;
 
-        // Draw scaled image
-        tmpCtx.drawImage(img, 0, 0, analysisSize, analysisSize);
-        const imageData = tmpCtx.getImageData(0, 0, analysisSize, analysisSize);
-        const data = imageData.data;
+        // Find the vertical center of brightness/contrast changes
+        // This usually corresponds to where the face/subject is
+        let colIntensity = new Array(size).fill(0);
+        let rowIntensity = new Array(size).fill(0);
 
-        // Detect skin-colored pixels and find their center of mass
-        let skinX = 0, skinY = 0, skinCount = 0;
-        let topSkinY = analysisSize, bottomSkinY = 0;
-        let leftSkinX = analysisSize, rightSkinX = 0;
-
-        for (let y = 0; y < analysisSize; y++) {
-            for (let x = 0; x < analysisSize; x++) {
-                const i = (y * analysisSize + x) * 4;
-                const r = data[i], g = data[i + 1], b = data[i + 2];
-
-                if (isSkinTone(r, g, b)) {
-                    skinX += x;
-                    skinY += y;
-                    skinCount++;
-                    if (y < topSkinY) topSkinY = y;
-                    if (y > bottomSkinY) bottomSkinY = y;
-                    if (x < leftSkinX) leftSkinX = x;
-                    if (x > rightSkinX) rightSkinX = x;
-                }
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                const i = (y * size + x) * 4;
+                const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                // Weight center pixels more heavily (subjects are usually centered)
+                const centerWeight = 1 + 2 * Math.exp(-((x - size / 2) ** 2 + (y - size / 2) ** 2) / (size * size * 0.15));
+                colIntensity[x] += brightness * centerWeight;
+                rowIntensity[y] += brightness * centerWeight;
             }
         }
 
-        if (skinCount > 100) {
-            // Scale back to original image coordinates
-            const scaleX = img.naturalWidth / analysisSize;
-            const scaleY = img.naturalHeight / analysisSize;
-
-            const centerX = (skinX / skinCount) * scaleX;
-            const width = (rightSkinX - leftSkinX) * scaleX;
-            const height = (bottomSkinY - topSkinY) * scaleY;
-            const top = topSkinY * scaleY;
-
-            return {
-                x: centerX - width / 2,
-                y: top,
-                width: width,
-                height: height
-            };
+        // Find the peak region (highest intensity = likely the subject)
+        let peakX = size / 2, peakY = size * 0.35;
+        let maxRow = 0;
+        for (let y = Math.floor(size * 0.1); y < Math.floor(size * 0.7); y++) {
+            if (rowIntensity[y] > maxRow) {
+                maxRow = rowIntensity[y];
+                peakY = y;
+            }
         }
 
-        // Absolute fallback: assume face is center-top
+        const scale = img.naturalWidth / size;
+        // Estimate face as the center ~40% of image, near the peak
+        const faceW = img.naturalWidth * 0.45;
+        const faceH = img.naturalHeight * 0.45;
         return {
-            x: img.naturalWidth * 0.2,
-            y: img.naturalHeight * 0.1,
-            width: img.naturalWidth * 0.6,
-            height: img.naturalHeight * 0.6
+            x: (img.naturalWidth - faceW) / 2,
+            y: peakY * scale - faceH * 0.2,
+            width: faceW,
+            height: faceH
         };
-    }
-
-    function isSkinTone(r, g, b) {
-        // Multiple skin tone detection rules for diversity
-        // Rule 1: RGB-based
-        const rgbSkin = r > 80 && g > 40 && b > 20 &&
-            r > g && r > b &&
-            (r - g) > 10 &&
-            Math.abs(r - g) < 120 &&
-            r - b > 20;
-
-        // Rule 2: Normalized RGB
-        const total = r + g + b;
-        if (total === 0) return false;
-        const nr = r / total, ng = g / total;
-        const normalizedSkin = nr > 0.35 && nr < 0.55 && ng > 0.25 && ng < 0.42;
-
-        // Rule 3: YCbCr space (handles darker skin tones better)
-        const y = 0.299 * r + 0.587 * g + 0.114 * b;
-        const cb = 128 - 0.169 * r - 0.331 * g + 0.5 * b;
-        const cr = 128 + 0.5 * r - 0.419 * g - 0.081 * b;
-        const ycbcrSkin = y > 40 && cb > 77 && cb < 127 && cr > 133 && cr < 173;
-
-        return rgbSkin || normalizedSkin || ycbcrSkin;
     }
 
     async function autoPlaceBandana(img) {
         setStatus('🔍 Detecting face...');
 
-        const faceBox = await detectFace(img);
+        const result = await detectFace(img);
+        const faceBox = result.box;
 
-        if (faceBox) {
-            // Get canvas-relative coordinates
-            const imgRatio = img.naturalWidth / img.naturalHeight;
-            let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
-            if (imgRatio > 1) {
-                sx = (img.naturalWidth - img.naturalHeight) / 2;
-                sw = img.naturalHeight;
-            } else {
-                sy = (img.naturalHeight - img.naturalWidth) / 2;
-                sh = img.naturalWidth;
-            }
-
-            // Transform face coordinates to canvas space
-            const scaleToCanvas = canvas.width / sw;
-            const faceCanvasX = (faceBox.x + faceBox.width / 2 - sx) * scaleToCanvas;
-            const faceCanvasY = (faceBox.y - sy) * scaleToCanvas;
-            const faceCanvasW = faceBox.width * scaleToCanvas;
-            const faceCanvasH = faceBox.height * scaleToCanvas;
-
-            // Position bandana at the bottom of the face (chin/neck area)
-            bandana.x = faceCanvasX;
-            bandana.y = faceCanvasY + faceCanvasH * 0.85;
-            bandana.size = Math.max(80, Math.min(400, faceCanvasW * 0.9));
-            bandana.rotation = 0;
-            bandana.flipH = false;
-            bandana.flipV = false;
-
-            // Update sliders
-            sizeSlider.value = bandana.size;
-            rotationSlider.value = 0;
-
-            setStatus('✅ Bandana placed! Fine-tune by dragging.');
+        // Transform face coords to canvas coords (accounting for square crop)
+        const imgRatio = img.naturalWidth / img.naturalHeight;
+        let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+        if (imgRatio > 1) {
+            sx = (img.naturalWidth - img.naturalHeight) / 2;
+            sw = img.naturalHeight;
         } else {
-            // Smart default: center-bottom
-            bandana.x = canvas.width / 2;
-            bandana.y = canvas.height * 0.65;
-            bandana.size = 180;
-            setStatus('📌 Placed at default. Drag to adjust.');
+            sy = (img.naturalHeight - img.naturalWidth) / 2;
+            sh = img.naturalWidth;
+        }
+
+        const scaleToCanvas = canvas.width / sw;
+        const faceCX = (faceBox.x + faceBox.width / 2 - sx) * scaleToCanvas;
+        const faceCY = (faceBox.y - sy) * scaleToCanvas;
+        const faceW = faceBox.width * scaleToCanvas;
+        const faceH = faceBox.height * scaleToCanvas;
+
+        // Place bandana at the chin/neck — bottom of face box
+        bandana.x = faceCX;
+        bandana.y = faceCY + faceH * 0.9;
+        bandana.size = Math.max(60, Math.min(350, faceW * 0.75));
+        bandana.rotation = 0;
+        bandana.flipH = false;
+        bandana.flipV = false;
+
+        sizeSlider.value = bandana.size;
+        rotationSlider.value = 0;
+
+        if (result.method === 'api') {
+            setStatus('✅ Face detected! Bandana placed. Drag to fine-tune.');
+        } else {
+            setStatus('✅ Bandana placed! Drag to fine-tune.');
         }
 
         draw();
@@ -312,17 +311,18 @@ function setupPFPGenerator() {
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
 
-        // Draw bandana overlay
-        if (bandanaImage.complete && bandanaImage.naturalWidth > 0) {
+        // Draw bandana
+        const bImg = bandanaClean || bandanaRaw;
+        if (bImg && bImg.complete && bImg.naturalWidth > 0) {
             ctx.save();
             ctx.translate(bandana.x, bandana.y);
             ctx.rotate((bandana.rotation * Math.PI) / 180);
             ctx.scale(bandana.flipH ? -1 : 1, bandana.flipV ? -1 : 1);
 
-            const aspect = bandanaImage.naturalWidth / bandanaImage.naturalHeight;
+            const aspect = bImg.naturalWidth / bImg.naturalHeight;
             const w = bandana.size;
             const h = w / aspect;
-            ctx.drawImage(bandanaImage, -w / 2, -h / 2, w, h);
+            ctx.drawImage(bImg, -w / 2, -h / 2, w, h);
             ctx.restore();
         }
     }
@@ -339,15 +339,14 @@ function setupPFPGenerator() {
                 userImage = img;
                 placeholder.classList.add('hidden');
                 wrap.classList.add('has-image');
-                draw(); // draw image first
-                await autoPlaceBandana(img); // then auto-detect and place
+                draw();
+                await autoPlaceBandana(img);
             };
             img.src = e.target.result;
         };
         reader.readAsDataURL(file);
     }
 
-    // Click to upload
     wrap.addEventListener('click', (e) => {
         if (!userImage && !isDragging) fileInput.click();
     });
@@ -356,7 +355,6 @@ function setupPFPGenerator() {
         if (e.target.files[0]) handleFile(e.target.files[0]);
     });
 
-    // Drag and drop file
     wrap.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); });
     wrap.addEventListener('drop', (e) => {
         e.preventDefault();
@@ -364,17 +362,21 @@ function setupPFPGenerator() {
         if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
     });
 
-    // ===== BANDANA DRAGGING (MOUSE) =====
+    // ===== BANDANA DRAGGING =====
+    function getHitSize() {
+        if (!bandanaClean && !bandanaRaw) return { w: bandana.size, h: bandana.size };
+        const bImg = bandanaClean || bandanaRaw;
+        const aspect = bImg.naturalWidth / bImg.naturalHeight;
+        return { w: bandana.size, h: bandana.size / aspect };
+    }
+
     canvas.addEventListener('mousedown', (e) => {
         if (!userImage) return;
         const scale = getCanvasScale();
         const rect = canvas.getBoundingClientRect();
         const mx = (e.clientX - rect.left) * scale;
         const my = (e.clientY - rect.top) * scale;
-
-        const aspect = bandanaImage.naturalWidth / bandanaImage.naturalHeight;
-        const w = bandana.size;
-        const h = w / aspect;
+        const { w, h } = getHitSize();
         const dx = mx - bandana.x;
         const dy = my - bandana.y;
 
@@ -397,7 +399,7 @@ function setupPFPGenerator() {
 
     window.addEventListener('mouseup', () => { isDragging = false; });
 
-    // ===== TOUCH SUPPORT =====
+    // Touch
     canvas.addEventListener('touchstart', (e) => {
         if (!userImage) return;
         const touch = e.touches[0];
@@ -405,13 +407,9 @@ function setupPFPGenerator() {
         const rect = canvas.getBoundingClientRect();
         const mx = (touch.clientX - rect.left) * scale;
         const my = (touch.clientY - rect.top) * scale;
-
-        const aspect = bandanaImage.naturalWidth / bandanaImage.naturalHeight;
-        const w = bandana.size;
-        const h = w / aspect;
+        const { w, h } = getHitSize();
         const dx = mx - bandana.x;
         const dy = my - bandana.y;
-
         if (Math.abs(dx) < w / 2 + 30 && Math.abs(dy) < h / 2 + 30) {
             isDragging = true;
             dragOffset.x = dx;
@@ -434,14 +432,8 @@ function setupPFPGenerator() {
     canvas.addEventListener('touchend', () => { isDragging = false; });
 
     // ===== CONTROLS =====
-    sizeSlider.addEventListener('input', () => {
-        bandana.size = parseInt(sizeSlider.value);
-        draw();
-    });
-    rotationSlider.addEventListener('input', () => {
-        bandana.rotation = parseInt(rotationSlider.value);
-        draw();
-    });
+    sizeSlider.addEventListener('input', () => { bandana.size = parseInt(sizeSlider.value); draw(); });
+    rotationSlider.addEventListener('input', () => { bandana.rotation = parseInt(rotationSlider.value); draw(); });
 
     flipHBtn.addEventListener('click', () => {
         bandana.flipH = !bandana.flipH;
@@ -454,11 +446,10 @@ function setupPFPGenerator() {
         draw();
     });
 
-    // Reset
     resetBtn.addEventListener('click', () => {
         userImage = null;
-        bandana = { x: 256, y: 320, size: 180, rotation: 0, flipH: false, flipV: false };
-        sizeSlider.value = 180;
+        bandana = { x: 256, y: 320, size: 160, rotation: 0, flipH: false, flipV: false };
+        sizeSlider.value = 160;
         rotationSlider.value = 0;
         flipHBtn.style.borderColor = '';
         flipVBtn.style.borderColor = '';
@@ -468,20 +459,14 @@ function setupPFPGenerator() {
         draw();
     });
 
-    // Download
     downloadBtn.addEventListener('click', () => {
-        if (!userImage) {
-            alert('Upload an image first!');
-            return;
-        }
+        if (!userImage) { alert('Upload an image first!'); return; }
         const link = document.createElement('a');
         link.download = 'koto-pfp.png';
         link.href = canvas.toDataURL('image/png');
         link.click();
     });
 
-    // Initial draw
-    bandanaImage.onload = () => draw();
     draw();
 }
 
